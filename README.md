@@ -9,11 +9,11 @@ cylinder remains a polygonal cylinder. Native import in Siemens Parasolid or
 Shapr3D has **not** been verified yet.
 
 ```sh
-bun add github:tscircuit/parasolidts
+bun add parasolidts
 ```
 
-The package ships TypeScript source and requires Bun or a TypeScript-aware
-bundler. It has no runtime dependencies and has not been published to npm.
+The npm package ships compiled ES modules and TypeScript declarations. It has
+no runtime dependencies.
 
 ## Write a model
 
@@ -131,3 +131,17 @@ Format references and upstream license notices are in
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 MIT license.
+
+## Publishing
+
+Releases use `.github/workflows/npm-publish.yml` on a `v<package-version>` tag
+or a manual run on `main`. The workflow validates tests, formatting, and types,
+builds the npm tarball, and publishes with GitHub OIDC and provenance. It does
+not use an npm token. Increment `package.json` before a new release.
+
+Configure the npm package's trusted publisher with GitHub organization
+`tscircuit`, repository `parasolidts`, workflow filename `npm-publish.yml`,
+no environment name, and **Allow npm publish** enabled. See
+[npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
+A new package must first be created with an authenticated initial publish
+before its npm settings can be configured.
