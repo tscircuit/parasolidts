@@ -7,6 +7,14 @@ import {
   type EntityField,
   serializeFields,
 } from "./entity"
+import {
+  AttributeIdentifier,
+  AttributeDefinition,
+  Attribute,
+  RealArray,
+  PointerList,
+  PointerListBlock,
+} from "./attributes"
 
 export interface BodyInit {
   id?: number
@@ -773,5 +781,11 @@ export const entityConstructors = {
   29: Point,
   30: Line,
   50: Plane,
+  70: PointerList,
+  74: PointerListBlock,
+  79: AttributeIdentifier,
+  80: AttributeDefinition,
+  81: Attribute,
   82: IntegerArray,
+  83: RealArray,
 } as const

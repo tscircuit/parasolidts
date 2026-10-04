@@ -2,25 +2,36 @@
 export type ParasolidPoint = readonly [number, number, number]
 export type ParasolidPolygon = readonly ParasolidPoint[]
 export type ParasolidPolygons = readonly ParasolidPolygon[]
+/** Native Parasolid RGB values, each in [0, 1]. Alpha is not supported. */
+export type ParasolidColor = readonly [number, number, number]
 
 export interface ParasolidWriteOptions {
   /** Input units. Parasolid stores geometry in metres. */
   units?: "mm" | "m"
   /** Reserved for future name attributes; names are not transmitted yet. */
   name?: string
+  /** Default RGB color, attached to the body and inherited by its faces. */
+  color?: ParasolidColor
+  /** Optional face overrides in polygon order; undefined inherits body color. */
+  faceColors?: readonly (ParasolidColor | undefined)[]
 }
 
 export interface ParasolidBodyInput {
   polygons: ParasolidPolygons
   /** Reserved for future name attributes; names are not transmitted yet. */
   name?: string
+  /** Default RGB color, attached to the body and inherited by its faces. */
+  color?: ParasolidColor
+  /** Optional face overrides in polygon order; undefined inherits body color. */
+  faceColors?: readonly (ParasolidColor | undefined)[]
 }
 
 type Point = [number, number, number]
-type Field = number | "+" | "-" | "S" | "V" | "?"
+type Field = number | string | boolean
 interface RecordNode {
   type: number
   id: number
+  variableCount?: number
   fields: Field[]
 }
 interface Edge {
@@ -161,7 +172,7 @@ function preparePolygons(polygons: ParasolidPolygons, scale: number) {
   return { points, inputPoints, cycles }
 }
 
-function inputScale(options: Omit<ParasolidWriteOptions, "name">) {
+function inputScale(options: Pick<ParasolidWriteOptions, "units">) {
   if (
     options.units !== undefined &&
     options.units !== "mm" &&
@@ -180,7 +191,7 @@ function inputScale(options: Omit<ParasolidWriteOptions, "name">) {
  */
 export function normalizePolygons(
   polygons: ParasolidPolygons,
-  options: Omit<ParasolidWriteOptions, "name"> = {},
+  options: Pick<ParasolidWriteOptions, "units"> = {},
 ): ParasolidPoint[][] {
   const scale = inputScale(options)
   const { inputPoints, cycles } = preparePolygons(polygons, scale)
@@ -307,25 +318,96 @@ export function createParasolidFromPolygons(
   polygons: ParasolidPolygons,
   options: ParasolidWriteOptions = {},
 ): string {
-  return createParasolidFromBodies([{ polygons, name: options.name }], options)
+  return createParasolidFromBodies(
+    [
+      {
+        polygons,
+        name: options.name,
+        color: options.color,
+        faceColors: options.faceColors,
+      },
+    ],
+    { units: options.units },
+  )
 }
 
 /** Write several independent polygon solids into one Parasolid text file. */
 export function createParasolidFromBodies(
   bodies: readonly ParasolidBodyInput[],
-  options: Omit<ParasolidWriteOptions, "name"> = {},
+  options: Pick<ParasolidWriteOptions, "units"> = {},
 ): string {
   if (bodies.length === 0)
     throw new Error("At least one solid body is required")
   const scale = inputScale(options)
   const records: RecordNode[] = []
-  const add = (type: number): RecordNode => {
-    const node = { type, id: records.length + 1, fields: [] as Field[] }
+  const add = (type: number, variableCount?: number): RecordNode => {
+    const node = {
+      type,
+      id: records.length + 1,
+      variableCount,
+      fields: [] as Field[],
+    }
     records.push(node)
     return node
   }
+  const colorDefinitions = new Map<8001 | 8040, RecordNode>()
+  const colorDefinition = (kind: 8001 | 8040): RecordNode => {
+    const existing = colorDefinitions.get(kind)
+    if (existing) return existing
+    const identifier = kind === 8001 ? "SDL/TYSA_COLOUR" : "SDL/TYSA_COLOUR_2"
+    const name = add(79, identifier.length)
+    name.fields = [identifier]
+    const definition = add(80, 1)
+    const allowedOwners = Array.from({ length: 14 }, (_, index) =>
+      kind === 8001 ? index === 4 || index === 6 : index <= 2,
+    )
+    definition.fields = [
+      0,
+      name.id,
+      kind,
+      0,
+      0,
+      0,
+      0,
+      3,
+      5,
+      0,
+      0,
+      0,
+      ...allowedOwners,
+      2,
+    ]
+    const previous = [...colorDefinitions.values()].at(-1)
+    if (previous) previous.fields[0] = definition.id
+    colorDefinitions.set(kind, definition)
+    return definition
+  }
+  const validateColor = (color: ParasolidColor | undefined) => {
+    if (color === undefined) return
+    if (
+      !Array.isArray(color) ||
+      color.length !== 3 ||
+      ![...color].every(
+        (channel) => Number.isFinite(channel) && channel >= 0 && channel <= 1,
+      )
+    ) {
+      throw new Error(
+        "Color must contain exactly three finite RGB channels in [0, 1]; alpha is not supported",
+      )
+    }
+  }
   const bodyNodes = bodies.map(() => add(12))
   bodies.forEach((input, bodyIndex) => {
+    validateColor(input.color)
+    if (input.faceColors !== undefined) {
+      if (
+        !Array.isArray(input.faceColors) ||
+        input.faceColors.length !== input.polygons.length
+      ) {
+        throw new Error("faceColors must have one entry per input polygon")
+      }
+      input.faceColors.forEach(validateColor)
+    }
     const { points, cycles } = prepareMesh(input.polygons, scale)
     const body = bodyNodes[bodyIndex]!
     const solid = add(19)
@@ -533,6 +615,72 @@ export function createParasolidFromBodies(
         ...unit(sub(points[edge.end]!, points[edge.start]!)),
       ]
     })
+
+    // Native system attributes are linked both from each colored owner and
+    // through the body's per-definition attribute chains. The RGB triple is one
+    // real-valued attribute field with three values, not three separate fields.
+    const attributeChains = new Map<8001 | 8040, RecordNode[]>()
+    const attachColor = (
+      owner: RecordNode,
+      kind: 8001 | 8040,
+      color: ParasolidColor,
+    ) => {
+      const definition = colorDefinition(kind)
+      const values = add(83, 3)
+      values.fields = [...color]
+      const attribute = add(81, 1)
+      attribute.fields = [
+        attribute.id,
+        definition.id,
+        owner.id,
+        0,
+        0,
+        0,
+        0,
+        values.id,
+      ]
+      owner.fields[1] = attribute.id
+      const chain = attributeChains.get(kind) ?? []
+      const previous = chain.at(-1)
+      if (previous) {
+        previous.fields[5] = attribute.id
+        attribute.fields[6] = previous.id
+      }
+      chain.push(attribute)
+      attributeChains.set(kind, chain)
+    }
+    if (input.color) attachColor(body, 8040, input.color)
+    faces.forEach((face, index) => {
+      const color = input.faceColors?.[index] ?? input.color
+      if (color) attachColor(face, 8001, color)
+    })
+    if (attributeChains.size > 0) {
+      const heads = [...attributeChains.values()].map((chain) => chain[0]!.id)
+      const list = add(70)
+      const block = add(74, 20)
+      list.fields = [
+        0,
+        4,
+        false,
+        body.id,
+        0,
+        0,
+        heads.length,
+        20,
+        1,
+        block.id,
+        block.id,
+      ]
+      block.fields = [
+        heads.length,
+        0,
+        0,
+        ...heads,
+        ...Array<number>(20 - heads.length).fill(0),
+      ]
+      body.fields[2] = list.id
+      body.fields[0] = records.length
+    }
   })
 
   // Characters and null-real '?' have no separator; numeric fields have one.
@@ -547,11 +695,12 @@ export function createParasolidFromBodies(
     records
       .map(
         (node) =>
-          `${node.type} ${node.id} ` +
+          `${node.type} ${node.variableCount === undefined ? "" : `${node.variableCount} `}${node.id} ` +
           node.fields
             .map((field) => {
               if (typeof field === "number")
                 return `${Object.is(field, -0) ? 0 : field} `
+              if (typeof field === "boolean") return field ? "T" : "F"
               return field
             })
             .join(""),

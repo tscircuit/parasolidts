@@ -37,8 +37,14 @@ export class EntityReference<T extends Entity = Entity> {
   }
 }
 
-export type FieldKind = "D" | "F" | "U" | "P" | "C" | "V"
-export type FieldValue = number | string | null | Vector3 | EntityReference
+export type FieldKind = "D" | "F" | "U" | "P" | "C" | "V" | "L"
+export type FieldValue =
+  | number
+  | string
+  | boolean
+  | null
+  | Vector3
+  | EntityReference
 export interface EntityField {
   name: string
   kind: FieldKind
@@ -68,13 +74,18 @@ export function serializeFields(fields: readonly EntityField[]): string {
     .map(({ kind, value }) => {
       if (kind === "P")
         return `${value === null ? 0 : (value as EntityReference).id} `
+      if (kind === "L") {
+        if (typeof value !== "boolean") throw new Error("Expected XT logical")
+        return value ? "T" : "F"
+      }
       if (kind === "C") {
-        if (
-          typeof value !== "string" ||
-          value.length !== 1 ||
-          /[\r\n\\]/.test(value)
-        )
-          throw new Error("Expected a single unescaped XT character")
+        if (typeof value !== "string" || value.length !== 1)
+          throw new Error("Expected a single XT character")
+        // XT §3.2 intentionally reverses the usual n/r escape meanings.
+        if (value === "\0") return "\\0"
+        if (value === "\r") return "\\n"
+        if (value === "\n") return "\\r"
+        if (value === "\\") return "\\\\"
         return value
       }
       if (kind === "V") {

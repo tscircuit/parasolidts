@@ -10,8 +10,14 @@ from that project is included here.
 
 The documented record geometry and wire framing are described in the
 [Parasolid XT Format Reference, April 2008](https://ww3.cad.de/foren/ubb/uploads/schulze/XT_Format_April_2008_tcm73-62642.pdf),
-particularly printed pages 5–19, 31–32, 54–55, 77–78, and 87–99.
+particularly printed pages 5–19, 31–32, 54–55, 77–78, and 87–110.
 That PDF and proprietary schema catalogs are not redistributed.
+
+Native RGB uses the standard attributes documented in Appendix A.1.1–A.1.2
+(printed page 121): `SDL/TYSA_COLOUR` (8001, faces/edges), and
+`SDL/TYSA_COLOUR_2` (8040, bodies/instances/assemblies). Attribute records and
+their chains follow §§5.4.1–5.4.8. The public worked example in §2.1.4.5
+demonstrates the same identifier/definition/attribute/real-array representation.
 
 Independent integration validation uses the separately installed
 `parasolid-kit` Python distribution (MIT AND Apache-2.0) and OCCT. Those are

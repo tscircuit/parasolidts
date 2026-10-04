@@ -34,7 +34,26 @@ await Bun.write("cube.x_t", xt)
 
 Inputs use millimetres by default; `{ units: "m" }` accepts metres. The writer
 always transmits metre coordinates. Use `createParasolidFromBodies([{ polygons },
-...])` for multiple solids. The initial writer does not encode names or colors.
+...])` for multiple solids. The initial writer does not encode names.
+
+RGB colors are preserved in native Parasolid attributes:
+
+```ts
+const xt = createParasolidFromBodies([
+  {
+    polygons,
+    color: [0.1, 0.2, 0.8], // body default, channels in [0, 1]
+    faceColors: polygons.map((_, index) => index === 0 ? [1, 0, 0] : undefined),
+  },
+])
+```
+
+`faceColors`, when supplied, must have one entry per input polygon. A face color
+overrides the body default. The writer uses the documented `SDL/TYSA_COLOUR_2`
+body attribute (8040), and writes the effective color on each face using
+`SDL/TYSA_COLOUR` (8001). These are actual X_T attributes, retained through
+parsing and editing. Only RGB is exported; alpha/transparency and materials are
+outside this release. Color display still depends on the importing CAD program.
 
 Input polygons must form closed, orientable, planar manifold surfaces. Open or
 nonmanifold geometry is rejected. Disconnected shells and enclosed cavity shells
@@ -69,6 +88,9 @@ const modified = repository.getString()
 `EntityReference<T>.resolve(repository)` resolves typed references. Constructors
 accept init objects. `Body`, `Region`, `Shell`, `Face`, `Loop`, `Fin`, `Edge`,
 `Vertex`, `Point`, `Line`, `Plane`, and `IntegerArray` expose typed properties.
+`AttributeIdentifier`, `AttributeDefinition`, `Attribute`, `RealArray`,
+`PointerList`, and `PointerListBlock` preserve native attribute records.
+`getEntityColor(repository, bodyOrFace)` reads its attached standard RGB attribute.
 `getChildren()` and `entries()` support inspection.
 
 Typed decoding covers the fixed-layout `SCH_3000000_30000` schema, zero user
@@ -77,7 +99,7 @@ including header fields and physical line wrapping. Unsupported schemas and
 unknown record suffixes become `UnknownEntity` data, because unknown record
 boundaries cannot be inferred safely. Such documents report `fullyParsed ===
 false` and can round-trip, but edits are rejected. Binary `.x_b`, arbitrary
-producer schemas, embedded schema changes, attributes, and analytic curved
+producer schemas, embedded schema changes, unsupported attribute value types, and analytic curved
 entities are outside this release's editable subset.
 
 `parseParasolid` is an alias of `parseRepository`; `stringifyParasolid(repo)`

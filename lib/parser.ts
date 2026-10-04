@@ -1,4 +1,5 @@
 import { entityConstructors, IntegerArray } from "./entities"
+import { VariableEntity } from "./attributes"
 import {
   EntityReference,
   UnknownEntity,
@@ -77,7 +78,9 @@ export function parseRepository(source: string): Repository {
       )
       return repository
     }
-    const count = nodeType === 82 ? reader.integer() : undefined
+    const count = [74, 79, 80, 81, 82, 83].includes(nodeType)
+      ? reader.integer()
+      : undefined
     if (count !== undefined && (count < 0 || count > 1_000_000))
       throw new Error("XT array length exceeds supported limits")
     const id = reader.integer()
@@ -87,6 +90,7 @@ export function parseRepository(source: string): Repository {
         reader.number(true),
       )
     } else {
+      if (entity instanceof VariableEntity) entity.setVariableLength(count ?? 0)
       for (const field of entity.getFields())
         setField(entity, field, reader.field(field))
     }
@@ -102,20 +106,55 @@ export function stringifyParasolid(repository: Repository): string {
 
 function setField(entity: Entity, field: EntityField, value: FieldValue): void {
   // Field names come exclusively from the typed class's own ordered descriptors.
+  const arrayField = /^(\w+)\[(\d+)\]$/.exec(field.name)
+  if (arrayField) {
+    const values: unknown = Reflect.get(entity, arrayField[1]!)
+    if (!Array.isArray(values))
+      throw new Error("Invalid array field descriptor")
+    values[Number(arrayField[2])] = value
+    return
+  }
   Object.assign(entity, { [field.name]: value })
 }
 
 class Reader {
   position = 0
+  private expandedSpaces = 0
   constructor(private text: string) {}
 
   character(): string {
+    this.requireExpansionConsumed()
     const value = this.text[this.position++]
     if (value === undefined) throw new Error("Truncated XT character")
     return value
   }
 
+  private requireExpansionConsumed(): void {
+    if (this.expandedSpaces !== 0)
+      throw new Error("XT compressed spaces cross a character-array boundary")
+  }
+
+  private escapedCharacter(): string {
+    if (this.expandedSpaces > 0) {
+      this.expandedSpaces--
+      return " "
+    }
+    const value = this.character()
+    if (value !== "\\") return value
+    const escaped = this.character()
+    if (escaped === "0") return "\0"
+    if (escaped === "n") return "\r"
+    if (escaped === "r") return "\n"
+    if (escaped === "\\") return "\\"
+    if (escaped === "9") {
+      this.expandedSpaces = 8
+      return " "
+    }
+    throw new Error(`Invalid XT character escape \\${escaped}`)
+  }
+
   token(allowEnd = false): string {
+    this.requireExpansionConsumed()
     const end = this.text.indexOf(" ", this.position)
     if (end === -1 && !allowEnd)
       throw new Error(`Truncated XT numeric field at ${this.position}`)
@@ -126,6 +165,7 @@ class Reader {
   }
 
   number(integer = false, allowEnd = false): number | null {
+    this.requireExpansionConsumed()
     if (this.text[this.position] === "?") {
       this.position++
       return null
@@ -159,7 +199,12 @@ class Reader {
   }
 
   field(field: EntityField): FieldValue {
-    if (field.kind === "C") return this.character()
+    if (field.kind === "C") return this.escapedCharacter()
+    if (field.kind === "L") {
+      const value = this.character()
+      if (value !== "T" && value !== "F") throw new Error("Invalid XT logical")
+      return value === "T"
+    }
     if (field.kind === "P") {
       const id = this.integer()
       return id === 0 ? null : new EntityReference(id)
