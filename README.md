@@ -145,3 +145,10 @@ no environment name, and **Allow npm publish** enabled. See
 [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 A new package must first be created with an authenticated initial publish
 before its npm settings can be configured.
+
+With npm 11.15+ and an authenticated maintainer session, configure the publisher
+using the CLI (npm may require browser verification):
+
+```sh
+npm trust github parasolidts --repo tscircuit/parasolidts --file npm-publish.yml --allow-publish
+```
