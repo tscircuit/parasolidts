@@ -1,0 +1,111 @@
+# parasolidts
+
+TypeScript classes, parser, and writer for a small documented subset of Parasolid
+text (`.x_t`). Closed polygon models become planar B-Rep solids that can be
+validated with an independent reader and OpenCascade.
+
+This is an initial implementation. It writes faceted surfaces: a polygonal
+cylinder remains a polygonal cylinder. Native import in Siemens Parasolid or
+Shapr3D has **not** been verified yet.
+
+```sh
+bun add github:tscircuit/parasolidts
+```
+
+The package ships TypeScript source and requires Bun or a TypeScript-aware
+bundler. It has no runtime dependencies and has not been published to npm.
+
+## Write a model
+
+```ts
+import { createParasolidFromPolygons } from "parasolidts"
+
+const xt = createParasolidFromPolygons([
+  [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+  [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+  [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+  [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+  [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
+  [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
+])
+
+await Bun.write("cube.x_t", xt)
+```
+
+Inputs use millimetres by default; `{ units: "m" }` accepts metres. The writer
+always transmits metre coordinates. Use `createParasolidFromBodies([{ polygons },
+...])` for multiple solids. The initial writer does not encode names or colors.
+
+Input polygons must form closed, orientable, planar manifold surfaces. Open or
+nonmanifold geometry is rejected. Disconnected shells and enclosed cavity shells
+must not be combined into a single input body. This is a faceted-solid exporter,
+not a curved-surface reconstruction or Boolean modeling kernel.
+
+The writer welds matching vertices and splits T-junctions at a fixed `1e-9 m`
+tolerance, then repairs face winding to point outward. `normalizePolygons`
+exposes that same welding and edge splitting, preserving input units, for
+callers that need to separate connected components before writing.
+
+For JSCAD/modelprinter inputs, use
+[jscad-to-parasolid](https://github.com/tscircuit/jscad-to-parasolid).
+
+## Parse and edit
+
+```ts
+import { Point, Vector3, parseRepository } from "parasolidts"
+
+const repository = parseRepository(await Bun.file("cube.x_t").text())
+for (const [, entity] of repository.entries()) {
+  if (entity instanceof Point) {
+    entity.position = new Vector3([entity.position.x + 0.001, entity.position.y, entity.position.z])
+  }
+}
+// Point-only edits demonstrate the API; moving an entire solid also requires
+// updating the corresponding line and plane geometry.
+const modified = repository.getString()
+```
+
+`Repository` owns entities and allocates IDs with `add(entity)`.
+`EntityReference<T>.resolve(repository)` resolves typed references. Constructors
+accept init objects. `Body`, `Region`, `Shell`, `Face`, `Loop`, `Fin`, `Edge`,
+`Vertex`, `Point`, `Line`, `Plane`, and `IntegerArray` expose typed properties.
+`getChildren()` and `entries()` support inspection.
+
+Typed decoding covers the fixed-layout `SCH_3000000_30000` schema, zero user
+fields, and those entity types. Unmodified source is returned byte-for-byte,
+including header fields and physical line wrapping. Unsupported schemas and
+unknown record suffixes become `UnknownEntity` data, because unknown record
+boundaries cannot be inferred safely. Such documents report `fullyParsed ===
+false` and can round-trip, but edits are rejected. Binary `.x_b`, arbitrary
+producer schemas, embedded schema changes, attributes, and analytic curved
+entities are outside this release's editable subset.
+
+`parseParasolid` is an alias of `parseRepository`; `stringifyParasolid(repo)`
+calls `repo.getString()`. The parser is not a geometry validator.
+`repo.getString({ canonical: true })` forces canonical serialization through
+the typed entities, even when the input was not edited.
+
+## Validation
+
+```sh
+bun install
+bun test
+bun run typecheck
+bun run format:check
+```
+
+Unit tests cover editing, references, exact source round-trips, unknown data,
+and invalid geometry. A project-authored fixture from the independent
+`parasolid-kit` project checks format framing without using this writer.
+
+The companion converter's integration tests read the generated `.x_t` with
+`parasolid-kit`, construct and validate an OCCT B-Rep, check geometric metrics,
+export GLB, and render it with `poppygl` for image snapshots. OpenCascade does
+not natively read Parasolid; `parasolid-kit` provides the explicit reader and
+adapter. This gives independent structural and geometric evidence, not
+Parasolid-kernel or Shapr3D certification.
+
+Format references and upstream license notices are in
+[THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+MIT license.

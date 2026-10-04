@@ -1,0 +1,2 @@
+# Native fixtures preserve significant framing spaces byte-for-byte.
+*.x_t -whitespace
