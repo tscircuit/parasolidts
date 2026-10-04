@@ -84,6 +84,8 @@ export function parseRepository(source: string): Repository {
     if (count !== undefined && (count < 0 || count > 1_000_000))
       throw new Error("XT array length exceeds supported limits")
     const id = reader.integer()
+    // Zero is the authoring sentinel in Repository.add, never a transmitted index.
+    if (id <= 0) throw new Error("Entity IDs must be positive integers")
     const entity: Entity = new EntityClass({ id })
     if (entity instanceof IntegerArray) {
       entity.values = Array.from({ length: count ?? 0 }, () =>
