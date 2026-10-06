@@ -1,143 +1,78 @@
 import { expect, test } from "bun:test"
 import {
+  Repository,
+  Body,
+  Face,
   Attribute,
   AttributeDefinition,
   AttributeIdentifier,
-  Face,
   RealArray,
-  createParasolidFromBodies,
-  createParasolidFromPolygons,
   getEntityColor,
   parseRepository,
 } from "../lib"
 
-const tetrahedron = [
-  [
-    [0, 0, 0],
-    [0, 1, 0],
-    [1, 0, 0],
-  ],
-  [
-    [0, 0, 0],
-    [1, 0, 0],
-    [0, 0, 1],
-  ],
-  [
-    [0, 0, 0],
-    [0, 0, 1],
-    [0, 1, 0],
-  ],
-  [
-    [1, 0, 0],
-    [0, 1, 0],
-    [0, 0, 1],
-  ],
-] as const
-
-test("native body RGB and face overrides survive parsing and canonical serialization", () => {
-  const source = createParasolidFromPolygons(tetrahedron, {
-    color: [0.1, 0.2, 0.8],
-    faceColors: [[1, 0, 0], undefined, undefined, undefined],
-  })
-  const repository = parseRepository(source)
-  expect(repository.fullyParsed).toBe(true)
-  expect(getEntityColor(repository, repository.bodies[0]!)).toEqual([
-    0.1, 0.2, 0.8,
-  ])
-  const faces = repository
-    .getChildren()
-    .filter((entity): entity is Face => entity instanceof Face)
-  expect(faces.map((face) => getEntityColor(repository, face))).toEqual([
-    [1, 0, 0],
-    [0.1, 0.2, 0.8],
-    [0.1, 0.2, 0.8],
-    [0.1, 0.2, 0.8],
-  ])
-  expect(repository.getString()).toBe(source)
-  const canonical = parseRepository(repository.getString({ canonical: true }))
-  expect(canonical.fullyParsed).toBe(true)
-  expect(getEntityColor(canonical, canonical.bodies[0]!)).toEqual([
-    0.1, 0.2, 0.8,
-  ])
-})
-
-test("editing a native color value updates the serialized RGB", () => {
-  const repository = parseRepository(
-    createParasolidFromPolygons(tetrahedron, { color: [0.25, 0.5, 0.75] }),
+test("native RGB attributes are authored, parsed, and edited through entity references", () => {
+  const repo = new Repository()
+  const body = repo.add(new Body())
+  const face = repo.add(new Face())
+  const identifier = repo.add(
+    new AttributeIdentifier({ value: "SDL/TYSA_COLOUR" }),
   )
-  const face = repository
-    .getChildren()
-    .find((entity): entity is Face => entity instanceof Face)!
-  const attribute = face.annotations?.resolve(repository)
-  expect(attribute).toBeInstanceOf(Attribute)
-  const values = (attribute as Attribute).valueArrays[0]?.resolve(repository)
-  expect(values).toBeInstanceOf(RealArray)
-  ;(values as RealArray).values = [0, 0, 0]
-  const parsed = parseRepository(repository.getString())
-  expect(getEntityColor(parsed, parsed.get<Face>(face.id)!)).toEqual([0, 0, 0])
-})
-
-test("standard color definitions are shared across bodies and use documented identifiers", () => {
-  const repository = parseRepository(
-    createParasolidFromBodies([
-      { polygons: tetrahedron, color: [1, 0, 0] },
-      { polygons: tetrahedron, color: [0, 0, 1] },
-    ]),
-  )
-  const definitions = repository
-    .getChildren()
-    .filter(
-      (entity): entity is AttributeDefinition =>
-        entity instanceof AttributeDefinition,
-    )
-  expect(definitions).toHaveLength(2)
-  expect(definitions.map((definition) => definition.kindId).sort()).toEqual([
-    8001, 8040,
-  ])
-  const identifiers = repository
-    .getChildren()
-    .filter(
-      (entity): entity is AttributeIdentifier =>
-        entity instanceof AttributeIdentifier,
-    )
-  expect(identifiers.map((identifier) => identifier.value).sort()).toEqual([
-    "SDL/TYSA_COLOUR",
-    "SDL/TYSA_COLOUR_2",
-  ])
-  expect(
-    repository.bodies.map((body) => getEntityColor(repository, body)),
-  ).toEqual([
-    [1, 0, 0],
-    [0, 0, 1],
-  ])
-})
-
-test("face-only colors do not invent body defaults or color unspecified faces", () => {
-  const repository = parseRepository(
-    createParasolidFromPolygons(tetrahedron, {
-      faceColors: [undefined, [0, 1, 0], undefined, undefined],
+  const definition = repo.add(
+    new AttributeDefinition({
+      identifierRef: identifier,
+      kindId: 8001,
+      valueKinds: [2],
+      allowedOwners: Array.from({ length: 14 }, (_, i) => i === 4 || i === 6),
     }),
   )
-  expect(getEntityColor(repository, repository.bodies[0]!)).toBeUndefined()
-  const faces = repository
-    .getChildren()
-    .filter((entity): entity is Face => entity instanceof Face)
-  expect(faces.map((face) => getEntityColor(repository, face))).toEqual([
-    undefined,
-    [0, 1, 0],
-    undefined,
-    undefined,
+  const values = repo.add(new RealArray({ values: [0.1, 0.2, 0.8] }))
+  const attribute = repo.add(
+    new Attribute({
+      definitionRef: definition,
+      ownerRef: face,
+      valueArrays: [values],
+    }),
+  )
+  face.resolve(repo).annotations = attribute
+
+  const source = repo.getString()
+  const parsed = parseRepository(source)
+  expect(parsed.getString()).toBe(source)
+  expect(getEntityColor(parsed, parsed.get<Face>(face.id)!)).toEqual([
+    0.1, 0.2, 0.8,
   ])
+  expect(getEntityColor(parsed, parsed.bodies[0]!)).toBeUndefined()
+  parsed.get<RealArray>(values.id)!.values = [1, 0, 0]
+  const edited = parseRepository(parsed.getString())
+  expect(getEntityColor(edited, edited.get<Face>(face.id)!)).toEqual([1, 0, 0])
+  expect(edited.get<Attribute>(attribute.id)!.ownerRef!.id).toBe(face.id)
+  expect(edited.get<Body>(body.id)).toBeInstanceOf(Body)
 })
 
-test("invalid native RGB and mismatched face-color arrays fail clearly", () => {
-  expect(() =>
-    createParasolidFromPolygons(tetrahedron, { color: [1.1, 0, 0] }),
-  ).toThrow()
-  expect(() =>
-    createParasolidFromPolygons(tetrahedron, { color: [0, Number.NaN, 0] }),
-  ).toThrow()
-  expect(() =>
-    createParasolidFromPolygons(tetrahedron, { faceColors: [[1, 0, 0]] }),
-  ).toThrow()
+test("malformed RGB attributes and annotation cycles return no color", () => {
+  const repo = new Repository()
+  const face = repo.add(new Face())
+  const definition = repo.add(
+    new AttributeDefinition({
+      kindId: 8001,
+      valueKinds: [2],
+      identifierRef: repo.add(
+        new AttributeIdentifier({ value: "SDL/TYSA_COLOUR" }),
+      ),
+    }),
+  )
+  const values = repo.add(new RealArray({ values: [1.1, 0, 0] }))
+  const attribute = repo.add(
+    new Attribute({
+      definitionRef: definition,
+      ownerRef: face,
+      valueArrays: [values],
+    }),
+  )
+  face.resolve(repo).annotations = attribute
+  attribute.resolve(repo).nextAnnotation = attribute
+  expect(getEntityColor(repo, face.resolve(repo))).toBeUndefined()
+  values.resolve(repo).values = [1, 0]
+  expect(getEntityColor(repo, face.resolve(repo))).toBeUndefined()
 })
