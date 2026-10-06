@@ -1,3 +1,5 @@
+import { mergeCoplanarRegions } from "./merge-coplanar"
+
 /** Coordinates in the input unit (millimetres by default). */
 export type ParasolidPoint = readonly [number, number, number]
 export type ParasolidPolygon = readonly ParasolidPoint[]
@@ -6,6 +8,8 @@ export type ParasolidPolygons = readonly ParasolidPolygon[]
 export type ParasolidColor = readonly [number, number, number]
 
 export interface ParasolidWriteOptions {
+  /** Merge adjacent coplanar faces with matching effective colors. Default true. */
+  mergeCoplanarFaces?: boolean
   /** Input units. Parasolid stores geometry in metres. */
   units?: "mm" | "m"
   /** Reserved for future name attributes; names are not transmitted yet. */
@@ -327,14 +331,14 @@ export function createParasolidFromPolygons(
         faceColors: options.faceColors,
       },
     ],
-    { units: options.units },
+    { units: options.units, mergeCoplanarFaces: options.mergeCoplanarFaces },
   )
 }
 
 /** Write several independent polygon solids into one Parasolid text file. */
 export function createParasolidFromBodies(
   bodies: readonly ParasolidBodyInput[],
-  options: Pick<ParasolidWriteOptions, "units"> = {},
+  options: Pick<ParasolidWriteOptions, "units" | "mergeCoplanarFaces"> = {},
 ): string {
   if (bodies.length === 0)
     throw new Error("At least one solid body is required")
@@ -408,7 +412,21 @@ export function createParasolidFromBodies(
       }
       input.faceColors.forEach(validateColor)
     }
-    const { points, cycles } = prepareMesh(input.polygons, scale)
+    const mesh = prepareMesh(input.polygons, scale)
+    const regions = mergeCoplanarRegions(
+      mesh.points,
+      mesh.cycles,
+      mesh.cycles.map((_, i) => input.faceColors?.[i] ?? input.color),
+      options.mergeCoplanarFaces !== false,
+    )
+    // Interior vertices no longer belong to topology after merging.
+    const used = [...new Set(regions.flatMap((region) => region.loops.flat()))]
+    const remap = new Map(used.map((id, index) => [id, index]))
+    const points = used.map((id) => mesh.points[id]!)
+    const boundaries = regions.map((region) =>
+      region.loops.map((loop) => loop.map((id) => remap.get(id)!)),
+    )
+    const cycles = boundaries.map((loops) => loops[0]!)
     const body = bodyNodes[bodyIndex]!
     const solid = add(19)
     const exterior = add(19)
@@ -417,29 +435,31 @@ export function createParasolidFromBodies(
     const vertices = points.map(() => add(18))
     const pointNodes = points.map(() => add(29))
     const faces = cycles.map(() => add(14))
-    const loops = cycles.map(() => add(15))
+    const loops = boundaries.map((rings) => rings.map(() => add(15)))
     const planes = cycles.map(() => add(50))
     const edges: Edge[] = []
     const edgeMap = new Map<string, Edge>()
     const fins: Fin[] = []
     const vertexFins = points.map(() => [] as number[])
-    const faceFins = cycles.map((cycle) =>
-      cycle.map((start, i) => {
-        const end = cycle[(i + 1) % cycle.length]!
-        const key = edgeKey(start, end)
-        let edge = edgeMap.get(key)
-        if (!edge) {
-          edge = { start, end, fins: [], node: add(16), curve: add(30) }
-          edgeMap.set(key, edge)
-          edges.push(edge)
-        }
-        const fin = { start, end, edge, node: add(17) }
-        const index = fins.length
-        fins.push(fin)
-        edge.fins.push(index)
-        vertexFins[end]!.push(index)
-        return index
-      }),
+    const faceFins = boundaries.map((rings) =>
+      rings.map((cycle) =>
+        cycle.map((start, i) => {
+          const end = cycle[(i + 1) % cycle.length]!
+          const key = edgeKey(start, end)
+          let edge = edgeMap.get(key)
+          if (!edge) {
+            edge = { start, end, fins: [], node: add(16), curve: add(30) }
+            edgeMap.set(key, edge)
+            edges.push(edge)
+          }
+          const fin = { start, end, edge, node: add(17) }
+          const index = fins.length
+          fins.push(fin)
+          edge.fins.push(index)
+          vertexFins[end]!.push(index)
+          return index
+        }),
+      ),
     )
     const maxId = records.length
     body.fields = [
@@ -535,7 +555,8 @@ export function createParasolidFromBodies(
     })
     cycles.forEach((cycle, i) => {
       const face = faces[i]!
-      const loop = loops[i]!
+      const faceLoops = loops[i]!
+      const loop = faceLoops[0]!
       const plane = planes[i]!
       const next = faces[i + 1]?.id ?? 0
       const previous = faces[i - 1]?.id ?? 0
@@ -555,8 +576,16 @@ export function createParasolidFromBodies(
         previous,
         frontShell.id,
       ]
-      const ring = faceFins[i]!
-      loop.fields = [loop.id, 0, fins[ring[0]!]!.node.id, face.id, 0]
+      const rings = faceFins[i]!
+      faceLoops.forEach((loop, j) => {
+        loop.fields = [
+          loop.id,
+          0,
+          fins[rings[j]![0]!]!.node.id,
+          face.id,
+          faceLoops[j + 1]?.id ?? 0,
+        ]
+      })
       const origin = points[cycle[0]!]!
       plane.fields = [
         plane.id,
@@ -567,27 +596,30 @@ export function createParasolidFromBodies(
         0,
         "+",
         ...origin,
-        ...normalOf(cycle, points),
+        ...regions[i]!.normal,
         ...unit(sub(points[cycle[1]!]!, origin)),
       ]
-      ring.forEach((finIndex, j) => {
-        const fin = fins[finIndex]!
-        const atVertex = vertexFins[fin.end]!
-        const vertexOffset = atVertex.indexOf(finIndex)
-        const nextAtVertex = atVertex[vertexOffset + 1]
-        const other = fin.edge.fins.find((index) => index !== finIndex)!
-        fin.node.fields = [
-          0,
-          loop.id,
-          fins[ring[(j + 1) % ring.length]!]!.node.id,
-          fins[ring[(j + ring.length - 1) % ring.length]!]!.node.id,
-          vertices[fin.end]!.id,
-          fins[other]!.node.id,
-          fin.edge.node.id,
-          0,
-          nextAtVertex === undefined ? 0 : fins[nextAtVertex]!.node.id,
-          fin.start === fin.edge.start ? "+" : "-",
-        ]
+      rings.forEach((ring, loopIndex) => {
+        const loop = faceLoops[loopIndex]!
+        ring.forEach((finIndex, j) => {
+          const fin = fins[finIndex]!
+          const atVertex = vertexFins[fin.end]!
+          const vertexOffset = atVertex.indexOf(finIndex)
+          const nextAtVertex = atVertex[vertexOffset + 1]
+          const other = fin.edge.fins.find((index) => index !== finIndex)!
+          fin.node.fields = [
+            0,
+            loop.id,
+            fins[ring[(j + 1) % ring.length]!]!.node.id,
+            fins[ring[(j + ring.length - 1) % ring.length]!]!.node.id,
+            vertices[fin.end]!.id,
+            fins[other]!.node.id,
+            fin.edge.node.id,
+            0,
+            nextAtVertex === undefined ? 0 : fins[nextAtVertex]!.node.id,
+            fin.start === fin.edge.start ? "+" : "-",
+          ]
+        })
       })
     })
     edges.forEach((edge, i) => {
@@ -651,7 +683,7 @@ export function createParasolidFromBodies(
     }
     if (input.color) attachColor(body, 8040, input.color)
     faces.forEach((face, index) => {
-      const color = input.faceColors?.[index] ?? input.color
+      const color = input.faceColors?.[regions[index]!.source] ?? input.color
       if (color) attachColor(face, 8001, color)
     })
     if (attributeChains.size > 0) {
