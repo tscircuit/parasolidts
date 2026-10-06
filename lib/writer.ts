@@ -1,5 +1,3 @@
-import { mergeCoplanarRegions } from "./merge-coplanar"
-
 /** Coordinates in the input unit (millimetres by default). */
 export type ParasolidPoint = readonly [number, number, number]
 export type ParasolidPolygon = readonly ParasolidPoint[]
@@ -8,8 +6,6 @@ export type ParasolidPolygons = readonly ParasolidPolygon[]
 export type ParasolidColor = readonly [number, number, number]
 
 export interface ParasolidWriteOptions {
-  /** Merge adjacent coplanar faces with matching effective colors. Default true. */
-  mergeCoplanarFaces?: boolean
   /** Input units. Parasolid stores geometry in metres. */
   units?: "mm" | "m"
   /** Reserved for future name attributes; names are not transmitted yet. */
@@ -20,15 +16,25 @@ export interface ParasolidWriteOptions {
   faceColors?: readonly (ParasolidColor | undefined)[]
 }
 
-export interface ParasolidBodyInput {
-  polygons: ParasolidPolygons
+/** A trimmed planar face: outer boundary first, followed by hole boundaries. */
+export interface ParasolidPlanarFace {
+  loops: ParasolidPolygons
+}
+
+interface ParasolidBodyAttributes {
   /** Reserved for future name attributes; names are not transmitted yet. */
   name?: string
-  /** Default RGB color, attached to the body and inherited by its faces. */
   color?: ParasolidColor
-  /** Optional face overrides in polygon order; undefined inherits body color. */
+  /** One entry per supplied polygon or explicit face; undefined inherits body color. */
   faceColors?: readonly (ParasolidColor | undefined)[]
 }
+
+/** Supply polygon faces or explicit multi-loop faces, never both. */
+export type ParasolidBodyInput = ParasolidBodyAttributes &
+  (
+    | { polygons: ParasolidPolygons; faces?: never }
+    | { faces: readonly ParasolidPlanarFace[]; polygons?: never }
+  )
 
 type Point = [number, number, number]
 type Field = number | string | boolean
@@ -204,18 +210,49 @@ export function normalizePolygons(
   )
 }
 
-function prepareMesh(polygons: ParasolidPolygons, scale: number) {
-  const { points, cycles } = preparePolygons(polygons, scale)
+function prepareMesh(faces: readonly ParasolidPlanarFace[], scale: number) {
+  if (faces.length < 4)
+    throw new Error("A closed solid requires at least four faces")
+  if (
+    faces.some((face) => !Array.isArray(face.loops) || face.loops.length === 0)
+  ) {
+    throw new Error("Every planar face requires an outer boundary loop")
+  }
+  const { points, cycles } = preparePolygons(
+    faces.flatMap((face) => [...face.loops]),
+    scale,
+  )
+  let offset = 0
+  const boundaries = faces.map((face) => {
+    const rings = cycles.slice(offset, offset + face.loops.length)
+    offset += face.loops.length
+    const outer = rings[0]!
+    const normal = normalOf(outer, points)
+    const origin = points[outer[0]!]!
+    for (const hole of rings.slice(1)) {
+      if (
+        hole.some(
+          (id) => Math.abs(dot(sub(points[id]!, origin), normal)) > tolerance,
+        )
+      ) {
+        throw new Error("All loops of a planar face must lie on the same plane")
+      }
+      // Inner boundaries traverse the face in the opposite direction.
+      if (dot(normalOf(hole, points), normal) > 0) hole.reverse()
+    }
+    return rings
+  })
 
   const uses = new Map<string, { face: number; start: number; end: number }[]>()
-  cycles.forEach((cycle, face) => {
-    cycle.forEach((start, i) => {
-      const end = cycle[(i + 1) % cycle.length]!
-      const key = edgeKey(start, end)
-      const entries = uses.get(key) ?? []
-      entries.push({ face, start, end })
-      uses.set(key, entries)
-    })
+  boundaries.forEach((rings, face) => {
+    for (const cycle of rings)
+      cycle.forEach((start, i) => {
+        const end = cycle[(i + 1) % cycle.length]!
+        const key = edgeKey(start, end)
+        const entries = uses.get(key) ?? []
+        entries.push({ face, start, end })
+        uses.set(key, entries)
+      })
   })
   for (const entries of uses.values()) {
     if (entries.length !== 2 || entries[0]!.face === entries[1]!.face) {
@@ -229,8 +266,9 @@ function prepareMesh(polygons: ParasolidPolygons, scale: number) {
   // surface patches touch at a point. The incident faces must form one fan.
   const vertexFaces = points.map(() => new Set<number>())
   const vertexNeighbours = points.map(() => new Map<number, Set<number>>())
-  cycles.forEach((cycle, face) => {
-    for (const vertex of cycle) vertexFaces[vertex]!.add(face)
+  boundaries.forEach((rings, face) => {
+    for (const cycle of rings)
+      for (const vertex of cycle) vertexFaces[vertex]!.add(face)
   })
   for (const entries of uses.values()) {
     const [a, b] = entries
@@ -270,27 +308,29 @@ function prepareMesh(polygons: ParasolidPolygons, scale: number) {
   const queue = [0]
   for (let q = 0; q < queue.length; q++) {
     const face = queue[q]!
-    const cycle = cycles[face]!
-    cycle.forEach((start, i) => {
-      const entries = uses.get(edgeKey(start, cycle[(i + 1) % cycle.length]!))!
-      const own = entries.find((entry) => entry.face === face)!
-      const other = entries.find((entry) => entry.face !== face)!
-      const flip = flips.get(face)! !== (own.start === other.start)
-      if (!flips.has(other.face)) {
-        flips.set(other.face, flip)
-        queue.push(other.face)
-      } else if (flips.get(other.face) !== flip) {
-        throw new Error("Mesh is not orientable")
-      }
-    })
+    for (const cycle of boundaries[face]!)
+      cycle.forEach((start, i) => {
+        const entries = uses.get(
+          edgeKey(start, cycle[(i + 1) % cycle.length]!),
+        )!
+        const own = entries.find((entry) => entry.face === face)!
+        const other = entries.find((entry) => entry.face !== face)!
+        const flip = flips.get(face)! !== (own.start === other.start)
+        if (!flips.has(other.face)) {
+          flips.set(other.face, flip)
+          queue.push(other.face)
+        } else if (flips.get(other.face) !== flip) {
+          throw new Error("Mesh is not orientable")
+        }
+      })
   }
-  if (flips.size !== cycles.length) {
+  if (flips.size !== boundaries.length) {
     throw new Error(
       "Disconnected shells are not supported in one body; use createParasolidFromBodies with one connected shell per body",
     )
   }
-  cycles.forEach((cycle, face) => {
-    if (flips.get(face)) cycle.reverse()
+  boundaries.forEach((rings, face) => {
+    if (flips.get(face)) for (const cycle of rings) cycle.reverse()
   })
   const origin = points[cycles[0]![0]!]!
   let volume6 = 0
@@ -309,7 +349,7 @@ function prepareMesh(polygons: ParasolidPolygons, scale: number) {
   if (Math.abs(volume6) <= tolerance ** 3)
     throw new Error("Mesh encloses zero volume")
   if (volume6 < 0) cycles.forEach((cycle) => cycle.reverse())
-  return { points, cycles }
+  return { points, boundaries }
 }
 
 /**
@@ -331,14 +371,14 @@ export function createParasolidFromPolygons(
         faceColors: options.faceColors,
       },
     ],
-    { units: options.units, mergeCoplanarFaces: options.mergeCoplanarFaces },
+    { units: options.units },
   )
 }
 
 /** Write several independent polygon solids into one Parasolid text file. */
 export function createParasolidFromBodies(
   bodies: readonly ParasolidBodyInput[],
-  options: Pick<ParasolidWriteOptions, "units" | "mergeCoplanarFaces"> = {},
+  options: Pick<ParasolidWriteOptions, "units"> = {},
 ): string {
   if (bodies.length === 0)
     throw new Error("At least one solid body is required")
@@ -403,29 +443,25 @@ export function createParasolidFromBodies(
   const bodyNodes = bodies.map(() => add(12))
   bodies.forEach((input, bodyIndex) => {
     validateColor(input.color)
+    if ((input.polygons === undefined) === (input.faces === undefined)) {
+      throw new Error(
+        "A body must supply either polygons or explicit faces, not both",
+      )
+    }
+    const inputFaces =
+      input.faces ?? input.polygons!.map((polygon) => ({ loops: [polygon] }))
     if (input.faceColors !== undefined) {
       if (
         !Array.isArray(input.faceColors) ||
-        input.faceColors.length !== input.polygons.length
+        input.faceColors.length !== inputFaces.length
       ) {
-        throw new Error("faceColors must have one entry per input polygon")
+        throw new Error(
+          "faceColors must have one entry per input polygon or face",
+        )
       }
       input.faceColors.forEach(validateColor)
     }
-    const mesh = prepareMesh(input.polygons, scale)
-    const regions = mergeCoplanarRegions(
-      mesh.points,
-      mesh.cycles,
-      mesh.cycles.map((_, i) => input.faceColors?.[i] ?? input.color),
-      options.mergeCoplanarFaces !== false,
-    )
-    // Interior vertices no longer belong to topology after merging.
-    const used = [...new Set(regions.flatMap((region) => region.loops.flat()))]
-    const remap = new Map(used.map((id, index) => [id, index]))
-    const points = used.map((id) => mesh.points[id]!)
-    const boundaries = regions.map((region) =>
-      region.loops.map((loop) => loop.map((id) => remap.get(id)!)),
-    )
+    const { points, boundaries } = prepareMesh(inputFaces, scale)
     const cycles = boundaries.map((loops) => loops[0]!)
     const body = bodyNodes[bodyIndex]!
     const solid = add(19)
@@ -596,7 +632,7 @@ export function createParasolidFromBodies(
         0,
         "+",
         ...origin,
-        ...regions[i]!.normal,
+        ...normalOf(cycle, points),
         ...unit(sub(points[cycle[1]!]!, origin)),
       ]
       rings.forEach((ring, loopIndex) => {
@@ -683,7 +719,7 @@ export function createParasolidFromBodies(
     }
     if (input.color) attachColor(body, 8040, input.color)
     faces.forEach((face, index) => {
-      const color = input.faceColors?.[regions[index]!.source] ?? input.color
+      const color = input.faceColors?.[index] ?? input.color
       if (color) attachColor(face, 8001, color)
     })
     if (attributeChains.size > 0) {
