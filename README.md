@@ -156,12 +156,26 @@ using the CLI (npm may require browser verification):
 npm trust github parasolidts --repo tscircuit/parasolidts --file npm-publish.yml --allow-publish
 ```
 
-## Coplanar face merging
+## Explicit planar faces with holes
 
-The polygon writer merges edge-connected coplanar polygons with matching effective
-RGB colors into single trimmed planar faces by default. Outer boundaries and hole
-loops are preserved, as are shared boundary vertices. This removes triangulation
-edges on flat caps without fitting curved surfaces or changing the mesh resolution.
-Ambiguous, crossing, or nearly touching boundaries retain their original polygons.
-Set `mergeCoplanarFaces: false` in the write options to preserve the input faces.
-The distance tolerance is 1e-9 meters; the normal-angle tolerance is 1e-10 radians.
+`createParasolidFromBodies` accepts either `polygons` or explicit `faces` on each
+body. A planar face supplies `loops`: the outer boundary first, followed by any
+hole boundaries. All loops must lie on the same plane and the faces must form a
+closed solid. `faceColors` is indexed by face, not by boundary loop.
+
+```ts
+const xt = createParasolidFromBodies([
+  {
+    faces: [
+      { loops: [bottomOuter, bottomHole] },
+      { loops: [topOuter, topHole] },
+      ...sideFaces.map((boundary) => ({ loops: [boundary] })),
+    ],
+  },
+])
+```
+
+The writer preserves the supplied face boundaries. It does not group coplanar
+polygons or infer curved surfaces. Existing `polygons` inputs continue to write
+one CAD face per polygon. Coplanar merging for JSCAD models belongs to
+`jscad-to-parasolid`, which passes the resulting faces to this serializer.
