@@ -155,3 +155,13 @@ using the CLI (npm may require browser verification):
 ```sh
 npm trust github parasolidts --repo tscircuit/parasolidts --file npm-publish.yml --allow-publish
 ```
+
+## Coplanar face merging
+
+The polygon writer merges edge-connected coplanar polygons with matching effective
+RGB colors into single trimmed planar faces by default. Outer boundaries and hole
+loops are preserved, as are shared boundary vertices. This removes triangulation
+edges on flat caps without fitting curved surfaces or changing the mesh resolution.
+Ambiguous, crossing, or nearly touching boundaries retain their original polygons.
+Set `mergeCoplanarFaces: false` in the write options to preserve the input faces.
+The distance tolerance is 1e-9 meters; the normal-angle tolerance is 1e-10 radians.
