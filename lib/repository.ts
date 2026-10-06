@@ -82,6 +82,17 @@ export class Repository {
 
   /** Canonical serializer; preserves the entire source when no typed properties changed. */
   getString(options: { canonical?: boolean } = {}): string {
+    // IDs are editable along with other typed properties, so add-time checks
+    // alone cannot guarantee a valid set of transmitted indices.
+    const ids = new Set<number>()
+    for (const entity of this.records) {
+      if (entity instanceof UnknownEntity) continue
+      if (!Number.isSafeInteger(entity.id) || entity.id <= 0)
+        throw new Error("Entity IDs must be positive integers")
+      if (ids.has(entity.id))
+        throw new Error(`Duplicate Parasolid entity ID ${entity.id}`)
+      ids.add(entity.id)
+    }
     const current = this.fingerprint()
     if (
       !options.canonical &&

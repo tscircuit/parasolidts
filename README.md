@@ -85,6 +85,9 @@ const modified = repository.getString()
 ```
 
 `Repository` owns entities and allocates IDs with `add(entity)`.
+ID `0` requests allocation only for newly authored entities; transmitted records
+must already have positive integer indices. Serialization rejects invalid or
+duplicate IDs introduced by editing, without renumbering entities or references.
 `EntityReference<T>.resolve(repository)` resolves typed references. Constructors
 accept init objects. `Body`, `Region`, `Shell`, `Face`, `Loop`, `Fin`, `Edge`,
 `Vertex`, `Point`, `Line`, `Plane`, and `IntegerArray` expose typed properties.
