@@ -24,4 +24,5 @@ export type {
   ParasolidPolygons,
   ParasolidWriteOptions,
   ParasolidBodyInput,
+  ParasolidPlanarFace,
 } from "./writer"
