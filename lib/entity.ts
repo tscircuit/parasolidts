@@ -1,4 +1,4 @@
-/** Coordinates in Parasolid transmit units (the writer uses metres). */
+/** Coordinates in native Parasolid transmit units (metres). */
 export class Vector3 {
   x: number
   y: number

@@ -1,11 +1,11 @@
 # parasolidts
 
-TypeScript classes, parser, and writer for a small documented subset of Parasolid
-text (`.x_t`). Closed polygon models become planar B-Rep solids that can be
-validated with an independent reader and OpenCascade.
+TypeScript entity classes, parser, and serializer for a small documented subset
+of Parasolid text (`.x_t`). Author and edit the native topology and geometry
+records through a repository of typed entities and references.
 
-This is an initial implementation. It writes faceted surfaces: a polygonal
-cylinder remains a polygonal cylinder. Native import in Siemens Parasolid or
+This is an initial implementation supporting planar surfaces and straight edges.
+Native import in Siemens Parasolid or
 Shapr3D has **not** been verified yet.
 
 ```sh
@@ -15,58 +15,58 @@ bun add parasolidts
 The npm package ships compiled ES modules and TypeScript declarations. It has
 no runtime dependencies.
 
-## Write a model
+## Author native entities
+
+Like `stepts`, a `Repository` owns native entities connected by typed references.
+Parasolid topology is a graph: bodies reference regions and shells, shells
+reference faces, faces reference loops, and loops reference cyclic fins. Fins
+share edges and vertices; geometry is held in point, line, and plane entities.
+The classes mirror those records and expose their named fields.
+
+For example, this constructs a face with linked outer and inner loops inside a
+shell (a topology fragment, not a complete closed solid):
 
 ```ts
-import { createParasolidFromPolygons } from "parasolidts"
+import { Repository, Body, Region, Shell, Face, Loop, Plane, Vector3 } from "parasolidts"
 
-const xt = createParasolidFromPolygons([
-  [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
-  [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
-  [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
-  [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
-  [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
-  [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
-])
+const repo = new Repository()
+const body = repo.add(new Body({ bodyKind: 1 }))
+const region = repo.add(new Region({ bodyRef: body, regionKind: "S" }))
+const shell = repo.add(new Shell({ regionRef: region }))
+const plane = repo.add(new Plane({
+  origin: new Vector3([0, 0, 0]),
+  normal: new Vector3([0, 0, 1]),
+  xDirection: new Vector3([1, 0, 0]),
+}))
+const face = repo.add(new Face({ backShell: shell, surfaceRef: plane }))
+const outer = repo.add(new Loop({ faceRef: face }))
+const inner = repo.add(new Loop({ faceRef: face }))
+body.resolve(repo).regionHead = region
+region.resolve(repo).shellHead = shell
+shell.resolve(repo).backFaces = face
+face.resolve(repo).loopHead = outer
+outer.resolve(repo).nextLoop = inner
+plane.resolve(repo).ownerRef = face
 
-await Bun.write("cube.x_t", xt)
+// Complete the loops with Fin / Edge / Vertex records and the remaining solid
+// topology before importing into a CAD kernel.
+const xt = repo.getString()
 ```
 
-Inputs use millimetres by default; `{ units: "m" }` accepts metres. The writer
-always transmits metre coordinates. Use `createParasolidFromBodies([{ polygons },
-...])` for multiple solids. The initial writer does not encode names.
+`repo.add(entity)` returns an `EntityReference<T>` and allocates an ID when it is
+zero. Constructors accept init objects; properties remain editable. Coordinates
+are native Parasolid metres. Serialization preserves the authored topology and
+does not infer faces, repair meshes, or merge coplanar regions.
 
-RGB colors are preserved in native Parasolid attributes:
+For JSCAD/modelprinter conversion, geometry validation, and coplanar merging, use
+[jscad-to-parasolid](https://github.com/tscircuit/jscad-to-parasolid), which builds
+this native entity graph. The polygon/body factories and `normalizePolygons`
+from version 0.0.2 have been removed from `parasolidts` in 0.0.3; callers should
+use that converter or construct native entities directly.
 
-```ts
-const xt = createParasolidFromBodies([
-  {
-    polygons,
-    color: [0.1, 0.2, 0.8], // body default, channels in [0, 1]
-    faceColors: polygons.map((_, index) => index === 0 ? [1, 0, 0] : undefined),
-  },
-])
-```
-
-`faceColors`, when supplied, must have one entry per input polygon. A face color
-overrides the body default. The writer uses the documented `SDL/TYSA_COLOUR_2`
-body attribute (8040), and writes the effective color on each face using
-`SDL/TYSA_COLOUR` (8001). These are actual X_T attributes, retained through
-parsing and editing. Only RGB is exported; alpha/transparency and materials are
-outside this release. Color display still depends on the importing CAD program.
-
-Input polygons must form closed, orientable, planar manifold surfaces. Open or
-nonmanifold geometry is rejected. Disconnected shells and enclosed cavity shells
-must not be combined into a single input body. This is a faceted-solid exporter,
-not a curved-surface reconstruction or Boolean modeling kernel.
-
-The writer welds matching vertices and splits T-junctions at a fixed `1e-9 m`
-tolerance, then repairs face winding to point outward. `normalizePolygons`
-exposes that same welding and edge splitting, preserving input units, for
-callers that need to separate connected components before writing.
-
-For JSCAD/modelprinter inputs, use
-[jscad-to-parasolid](https://github.com/tscircuit/jscad-to-parasolid).
+Native RGB attributes use `AttributeIdentifier`, `AttributeDefinition`,
+`Attribute`, and `RealArray`. Attribute chains reference owners and values;
+`getEntityColor(repository, bodyOrFace)` reads standard attached RGB attributes.
 
 ## Parse and edit
 
@@ -120,7 +120,7 @@ bun run format:check
 ```
 
 Unit tests cover editing, references, exact source round-trips, unknown data,
-and invalid geometry. A project-authored fixture from the independent
+and native topology and attribute authoring. A project-authored fixture from the independent
 `parasolid-kit` project checks format framing without using this writer.
 
 The companion converter's integration tests read the generated `.x_t` with

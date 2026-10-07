@@ -1,6 +1,6 @@
 {
   "name": "parasolidts",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "TypeScript parser and serializer for Parasolid text files",
   "type": "module",
   "module": "./dist/index.js",

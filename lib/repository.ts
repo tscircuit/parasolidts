@@ -39,7 +39,22 @@ export class Repository {
 
   constructor(init: { header?: TransmitHeader; entities?: Entity[] } = {}) {
     this.header = init.header ?? new TransmitHeader()
-    for (const entity of init.entities ?? []) this.add(entity)
+    // Bulk authoring can contain thousands of records. Validate and allocate in
+    // one pass; later edits to IDs remain observable through get() and getString().
+    const ids = new Set<number>()
+    let maxId = 0
+    for (const entity of init.entities ?? []) {
+      if (entity instanceof UnknownEntity)
+        throw new Error("Use parser preservation for unknown stream data")
+      if (entity.id === 0) entity.id = maxId + 1
+      if (!Number.isSafeInteger(entity.id) || entity.id <= 0)
+        throw new Error("Entity IDs must be positive integers")
+      if (ids.has(entity.id))
+        throw new Error(`Duplicate Parasolid entity ID ${entity.id}`)
+      ids.add(entity.id)
+      maxId = Math.max(maxId, entity.id)
+      this.records.push(entity)
+    }
   }
 
   add<T extends Entity>(entity: T): EntityReference<T> {

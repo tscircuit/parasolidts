@@ -88,3 +88,22 @@ test("manual authoring still assigns IDs, and sparse out-of-order input retains 
   ])
   expect([...edited.entries()].map(([id]) => id)).toEqual([9, 2])
 })
+
+test("bulk authoring preserves explicit IDs and allocates after the largest ID", () => {
+  const explicit = new Point({ id: 25 })
+  const first = new Point()
+  const sparse = new Point({ id: 4 })
+  const second = new Point()
+  const repo = new Repository({ entities: [explicit, first, sparse, second] })
+  expect([...repo.entries()].map(([id]) => id)).toEqual([25, 26, 4, 27])
+  expect(parseRepository(repo.getString()).get<Point>(26)).toBeInstanceOf(Point)
+  expect(
+    () =>
+      new Repository({
+        entities: [new Point({ id: 5 }), new Point({ id: 5 })],
+      }),
+  ).toThrow("Duplicate")
+  expect(() => new Repository({ entities: [new Point({ id: -1 })] })).toThrow(
+    "positive integers",
+  )
+})
