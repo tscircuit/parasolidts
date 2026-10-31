@@ -1,5 +1,5 @@
 import { Body } from "./entities"
-import { Entity, EntityReference, UnknownEntity } from "./entity"
+import { type Entity, EntityReference, UnknownEntity } from "./entity"
 
 export const SUPPORTED_SCHEMA = "SCH_3000000_30000"
 
@@ -60,8 +60,13 @@ export class Repository {
   add<T extends Entity>(entity: T): EntityReference<T> {
     if (entity instanceof UnknownEntity)
       throw new Error("Use parser preservation for unknown stream data")
-    if (entity.id === 0)
-      entity.id = Math.max(0, ...this.records.map((record) => record.id)) + 1
+    if (entity.id === 0) {
+      let maxId = 0
+      for (const record of this.records) {
+        if (record.id > maxId) maxId = record.id
+      }
+      entity.id = maxId + 1
+    }
     if (!Number.isSafeInteger(entity.id) || entity.id <= 0)
       throw new Error("Entity IDs must be positive integers")
     if (this.get(entity.id))

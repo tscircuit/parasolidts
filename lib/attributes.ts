@@ -1,11 +1,11 @@
 // Documented system attributes and V30 record layouts: XT reference §§5.4.1–8, A.1.1–2.
 import {
   Entity,
-  EntityReference,
-  serializeFields,
   type EntityField,
-  type FieldValue,
+  EntityReference,
   type FieldKind,
+  type FieldValue,
+  serializeFields,
 } from "./entity"
 
 export abstract class VariableEntity extends Entity {
@@ -190,19 +190,45 @@ export class Attribute extends VariableEntity {
 export class PointerList extends Entity {
   readonly type = "PointerList"
   readonly nodeType = 70
-  localId = 0
-  entryKind = 4
-  transmissionFlag = true
-  ownerRef: EntityReference | null = null
-  nextList: EntityReference<PointerList> | null = null
-  previousList: EntityReference<PointerList> | null = null
-  entryCount = 0
-  blockCapacity = 0
-  cursorIndex = 0
-  cursorBlock: EntityReference<PointerListBlock> | null = null
-  firstBlock: EntityReference<PointerListBlock> | null = null
-  constructor(init: { id?: number } = {}) {
+  localId: number
+  entryKind: number
+  transmissionFlag: boolean
+  ownerRef: EntityReference | null
+  nextList: EntityReference<PointerList> | null
+  previousList: EntityReference<PointerList> | null
+  entryCount: number
+  blockCapacity: number
+  cursorIndex: number
+  cursorBlock: EntityReference<PointerListBlock> | null
+  firstBlock: EntityReference<PointerListBlock> | null
+  constructor(
+    init: {
+      id?: number
+      localId?: number
+      entryKind?: number
+      transmissionFlag?: boolean
+      ownerRef?: EntityReference | null
+      nextList?: EntityReference<PointerList> | null
+      previousList?: EntityReference<PointerList> | null
+      entryCount?: number
+      blockCapacity?: number
+      cursorIndex?: number
+      cursorBlock?: EntityReference<PointerListBlock> | null
+      firstBlock?: EntityReference<PointerListBlock> | null
+    } = {},
+  ) {
     super(init.id)
+    this.localId = init.localId ?? 0
+    this.entryKind = init.entryKind ?? 4
+    this.transmissionFlag = init.transmissionFlag ?? true
+    this.ownerRef = init.ownerRef ?? null
+    this.nextList = init.nextList ?? null
+    this.previousList = init.previousList ?? null
+    this.entryCount = init.entryCount ?? 0
+    this.blockCapacity = init.blockCapacity ?? 0
+    this.cursorIndex = init.cursorIndex ?? 0
+    this.cursorBlock = init.cursorBlock ?? null
+    this.firstBlock = init.firstBlock ?? null
   }
   getFields(): EntityField[] {
     return [
@@ -227,16 +253,25 @@ export class PointerList extends Entity {
 export class PointerListBlock extends VariableEntity {
   readonly type = "PointerListBlock"
   readonly nodeType = 74
-  usedCount = 0
-  indexOrigin = 0
-  nextBlock: EntityReference<PointerListBlock> | null = null
+  usedCount: number
+  indexOrigin: number
+  nextBlock: EntityReference<PointerListBlock> | null
   entries: (EntityReference | null)[]
   constructor(
-    init: { id?: number; entries?: (EntityReference | null)[] } = {},
+    init: {
+      id?: number
+      usedCount?: number
+      indexOrigin?: number
+      nextBlock?: EntityReference<PointerListBlock> | null
+      entries?: (EntityReference | null)[]
+    } = {},
   ) {
     super(init.id)
     this.entries = init.entries ?? []
-    this.usedCount = this.entries.length
+    this.usedCount =
+      init.usedCount ?? this.entries.filter((entry) => entry !== null).length
+    this.indexOrigin = init.indexOrigin ?? 0
+    this.nextBlock = init.nextBlock ?? null
   }
   get variableLength(): number {
     return this.entries.length
@@ -268,13 +303,24 @@ export function getEntityColor(
     visited.add(id)
     const attribute = repository.get(id)
     if (!(attribute instanceof Attribute)) return undefined
-    const definition = attribute.definitionRef?.resolve(repository)
-    const identifier = definition?.identifierRef?.resolve(repository).value
+    const definition = attribute.definitionRef
+      ? repository.get(attribute.definitionRef.id)
+      : undefined
+    const identifierEntity =
+      definition instanceof AttributeDefinition && definition.identifierRef
+        ? repository.get(definition.identifierRef.id)
+        : undefined
+    const identifier =
+      identifierEntity instanceof AttributeIdentifier
+        ? identifierEntity.value
+        : undefined
     if (
-      (identifier === "SDL/TYSA_COLOUR" && definition?.kindId === 8001) ||
-      (identifier === "SDL/TYSA_COLOUR_2" && definition?.kindId === 8040)
+      definition instanceof AttributeDefinition &&
+      ((identifier === "SDL/TYSA_COLOUR" && definition.kindId === 8001) ||
+        (identifier === "SDL/TYSA_COLOUR_2" && definition.kindId === 8040))
     ) {
-      const values = attribute.valueArrays[0]?.resolve(repository)
+      const valueRef = attribute.valueArrays[0]
+      const values = valueRef ? repository.get(valueRef.id) : undefined
       if (
         values instanceof RealArray &&
         values.values.length === 3 &&

@@ -1,12 +1,12 @@
-import { entityConstructors, IntegerArray } from "./entities"
 import { VariableEntity } from "./attributes"
+import { entityConstructors, IntegerArray } from "./entities"
 import {
-  EntityReference,
-  UnknownEntity,
-  Vector3,
   type Entity,
   type EntityField,
+  EntityReference,
   type FieldValue,
+  UnknownEntity,
+  Vector3,
 } from "./entity"
 import { Repository, SUPPORTED_SCHEMA, TransmitHeader } from "./repository"
 
@@ -46,6 +46,8 @@ export function parseRepository(source: string): Repository {
     return repository
   }
   repository.header.userFieldSize = reader.integer()
+  if (repository.header.userFieldSize < 0)
+    throw new Error("Invalid XT user field size")
   if (repository.header.userFieldSize !== 0) {
     repository.preserveSource(
       source,
