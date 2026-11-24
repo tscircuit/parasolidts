@@ -107,3 +107,14 @@ test("bulk authoring preserves explicit IDs and allocates after the largest ID",
     "positive integers",
   )
 })
+
+test("integer fields reject values outside the signed 32-bit XT range", () => {
+  expect(() => parseRepository(stream("82 1 7 2147483648 "))).toThrow("32-bit")
+  expect(() => parseRepository(stream("82 1 7 -2147483649 "))).toThrow("32-bit")
+  expect(
+    parseRepository(stream("82 1 7 -2147483648 ")).get<IntegerArray>(7)?.values,
+  ).toEqual([-2147483648])
+  const repository = new Repository()
+  repository.add(new IntegerArray({ values: [2147483648] }))
+  expect(() => repository.getString()).toThrow("32-bit")
+})

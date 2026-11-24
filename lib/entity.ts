@@ -111,6 +111,8 @@ export function serializeFields(fields: readonly EntityField[]): string {
 function formatNumber(value: number, integer: boolean): string {
   if (!Number.isFinite(value) || (integer && !Number.isSafeInteger(value)))
     throw new Error("Expected finite XT number")
+  if (integer && (value < -2147483648 || value > 2147483647))
+    throw new Error("XT integer is outside the signed 32-bit range")
   return `${Object.is(value, -0) ? 0 : value} `
 }
 

@@ -184,6 +184,8 @@ class Reader {
   integer(allowEnd = false): number {
     const value = this.number(true, allowEnd)
     if (value === null) throw new Error("Required XT integer is unset")
+    if (value < -2147483648 || value > 2147483647)
+      throw new Error("XT integer is outside the signed 32-bit range")
     return value
   }
 
